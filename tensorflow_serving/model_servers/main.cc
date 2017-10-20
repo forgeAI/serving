@@ -237,8 +237,7 @@ class PredictionServiceImpl final : public PredictionService::Service {
     return status;
   }
 
-  grpc::Status Regress(ServerContext* context,
-                       const RegressionRequest* request,
+  grpc::Status Regress(ServerContext* context, const RegressionRequest* request,
                        RegressionResponse* response) override {
     tensorflow::RunOptions run_options = tensorflow::RunOptions();
     // By default, this is infinite which is the same default as RunOptions.
