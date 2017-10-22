@@ -280,13 +280,6 @@ void RunServer(int port, std::unique_ptr<ServerCore> core, bool use_saved_model)
     server->Wait();
 }
 
-// Parses an ascii PlatformConfigMap protobuf from 'file'.
-tf::serving::PlatformConfigMap ParsePlatformConfigMap(const string &file) {
-    tf::serving::PlatformConfigMap platform_config_map;
-    TF_CHECK_OK(ParseProtoTextFile(file, &platform_config_map));
-    return platform_config_map;
-}
-
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -297,7 +290,6 @@ int main(int argc, char **argv) {
     tf::int32 port = 8500;
     string model_name = "default";
     tf::int32 file_system_poll_wait_seconds = 1;
-    string platform_config_file = "";
     string model_config_file;
     // Tensorflow session parallelism of zero means that both inter and intra op
     // thread pools will be auto configured.
@@ -328,14 +320,7 @@ int main(int argc, char **argv) {
                  "system for new model version"),
         tf::Flag("tensorflow_session_parallelism", &tensorflow_session_parallelism,
                  "Number of threads to use for running a "
-                 "Tensorflow session. Auto-configured by default."
-                 "Note that this option is ignored if "
-                 "--platform_config_file is non-empty."),
-        tf::Flag("platform_config_file", &platform_config_file,
-                 "If non-empty, read an ascii PlatformConfigMap protobuf "
-                 "from the supplied file name, and use that platform "
-                 "config instead of the Tensorflow platform. (If used, "
-                 "--enable_batching is ignored.)")};
+                 "Tensorflow session. Auto-configured by default.")};
 
     string usage = tf::Flags::Usage(argv[0], flag_list);
     const bool parse_result = tf::Flags::Parse(&argc, argv, flag_list);
@@ -359,38 +344,25 @@ int main(int argc, char **argv) {
         options.model_server_config = ReadProtoFromFile<ModelServerConfig>(model_config_file);
     }
 
-    if (platform_config_file.empty()) {
-        SessionBundleConfig session_bundle_config;
-        // Batching config
-        if (enable_batching) {
-            BatchingParameters *batching_parameters =
-                session_bundle_config.mutable_batching_parameters();
-            if (batching_parameters_file.empty()) {
-                batching_parameters->mutable_thread_pool_name()->set_value(
-                    "model_server_batch_threads");
-            } else {
-                *batching_parameters =
-                    ReadProtoFromFile<BatchingParameters>(batching_parameters_file);
-            }
-        } else if (!batching_parameters_file.empty()) {
-            LOG(FATAL)  // Crash ok
-                << "You supplied --batching_parameters_file "
-                   "without "
-                   "--enable_batching";
+    SessionBundleConfig session_bundle_config;
+    // Batching config
+    if (enable_batching) {
+        BatchingParameters *batching_parameters = session_bundle_config.mutable_batching_parameters();
+        if (batching_parameters_file.empty()) {
+            batching_parameters->mutable_thread_pool_name()->set_value("model_server_batch_threads");
+        } else {
+            *batching_parameters = ReadProtoFromFile<BatchingParameters>(batching_parameters_file);
         }
-
-        session_bundle_config.mutable_session_config()->set_intra_op_parallelism_threads(
-            tensorflow_session_parallelism);
-        session_bundle_config.mutable_session_config()->set_inter_op_parallelism_threads(
-            tensorflow_session_parallelism);
-        options.platform_config_map =
-            CreateTensorFlowPlatformConfigMap(session_bundle_config, use_saved_model);
-    } else {
-        options.platform_config_map = ParsePlatformConfigMap(platform_config_file);
+    } else if (!batching_parameters_file.empty()) {
+        LOG(FATAL)  // Crash ok
+            << "You supplied --batching_parameters_file without --enable_batching";
     }
 
-    options.aspired_version_policy =
-        std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
+    session_bundle_config.mutable_session_config()->set_intra_op_parallelism_threads(tensorflow_session_parallelism);
+    session_bundle_config.mutable_session_config()->set_inter_op_parallelism_threads(tensorflow_session_parallelism);
+    options.platform_config_map = CreateTensorFlowPlatformConfigMap(session_bundle_config, use_saved_model);
+
+    options.aspired_version_policy = std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
     options.file_system_poll_wait_seconds = file_system_poll_wait_seconds;
 
     std::unique_ptr<ServerCore> core;
