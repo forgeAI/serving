@@ -81,333 +81,324 @@ namespace grpc {
 class ServerCompletionQueue;
 }  // namespace grpc
 
-using tensorflow::serving::AspiredVersionsManager;
-using tensorflow::serving::AspiredVersionPolicy;
-using tensorflow::serving::AvailabilityPreservingPolicy;
-using tensorflow::serving::BatchingParameters;
-using tensorflow::serving::EventBus;
-using tensorflow::serving::FileSystemStoragePathSourceConfig;
-using tensorflow::serving::GetModelMetadataImpl;
-using tensorflow::serving::ModelServerConfig;
-using tensorflow::serving::ServableState;
-using tensorflow::serving::ServerCore;
-using tensorflow::serving::SessionBundleConfig;
-using tensorflow::serving::TensorflowClassificationServiceImpl;
-using tensorflow::serving::TensorflowRegressionServiceImpl;
-using tensorflow::serving::TensorflowPredictor;
-using tensorflow::serving::UniquePtrWithDeps;
-using tensorflow::string;
+namespace tf = tensorflow;
+using tf::serving::AspiredVersionsManager;
+using tf::serving::AspiredVersionPolicy;
+using tf::serving::AvailabilityPreservingPolicy;
+using tf::serving::BatchingParameters;
+using tf::serving::EventBus;
+using tf::serving::FileSystemStoragePathSourceConfig;
+using tf::serving::GetModelMetadataImpl;
+using tf::serving::ModelServerConfig;
+using tf::serving::ServableState;
+using tf::serving::ServerCore;
+using tf::serving::SessionBundleConfig;
+using tf::serving::TensorflowClassificationServiceImpl;
+using tf::serving::TensorflowRegressionServiceImpl;
+using tf::serving::TensorflowPredictor;
+using tf::serving::UniquePtrWithDeps;
+using tf::string;
 
 using grpc::InsecureServerCredentials;
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
-using tensorflow::serving::ClassificationRequest;
-using tensorflow::serving::ClassificationResponse;
-using tensorflow::serving::GetModelMetadataRequest;
-using tensorflow::serving::GetModelMetadataResponse;
-using tensorflow::serving::MultiInferenceRequest;
-using tensorflow::serving::MultiInferenceResponse;
-using tensorflow::serving::PredictRequest;
-using tensorflow::serving::PredictResponse;
-using tensorflow::serving::RegressionRequest;
-using tensorflow::serving::RegressionResponse;
-using tensorflow::serving::PredictionService;
+using tf::serving::ClassificationRequest;
+using tf::serving::ClassificationResponse;
+using tf::serving::GetModelMetadataRequest;
+using tf::serving::GetModelMetadataResponse;
+using tf::serving::MultiInferenceRequest;
+using tf::serving::MultiInferenceResponse;
+using tf::serving::PredictRequest;
+using tf::serving::PredictResponse;
+using tf::serving::RegressionRequest;
+using tf::serving::RegressionResponse;
+using tf::serving::PredictionService;
+
+using tf::protobuf::TextFormat;
 
 namespace {
 
-tensorflow::Status ParseProtoTextFile(const string& file,
-                                      google::protobuf::Message* message) {
-  std::unique_ptr<tensorflow::ReadOnlyMemoryRegion> file_data;
-  TF_RETURN_IF_ERROR(
-      tensorflow::Env::Default()->NewReadOnlyMemoryRegionFromFile(file,
-                                                                  &file_data));
-  string file_data_str(static_cast<const char*>(file_data->data()),
-                       file_data->length());
-  if (tensorflow::protobuf::TextFormat::ParseFromString(file_data_str,
-                                                        message)) {
-    return tensorflow::Status::OK();
-  } else {
-    return tensorflow::errors::InvalidArgument("Invalid protobuf file: '", file,
-                                               "'");
-  }
-}
+tf::Status ParseProtoTextFile(const string &file, google::protobuf::Message *message) {
+    std::unique_ptr<tf::ReadOnlyMemoryRegion> file_data;
+    TF_RETURN_IF_ERROR(tf::Env::Default()->NewReadOnlyMemoryRegionFromFile(file, &file_data));
+    string file_data_str(static_cast<const char *>(file_data->data()), file_data->length());
 
-tensorflow::Status LoadCustomModelConfig(
-    const ::google::protobuf::Any& any,
-    EventBus<ServableState>* servable_event_bus,
-    UniquePtrWithDeps<AspiredVersionsManager>* manager) {
-  LOG(FATAL)  // Crash ok
-      << "ModelServer does not yet support custom model config.";
-}
-
-ModelServerConfig BuildSingleModelConfig(const string& model_name,
-                                         const string& model_base_path) {
-  ModelServerConfig config;
-  LOG(INFO) << "Building single TensorFlow model file config: "
-            << " model_name: " << model_name
-            << " model_base_path: " << model_base_path;
-  tensorflow::serving::ModelConfig* single_model =
-      config.mutable_model_config_list()->add_config();
-  single_model->set_name(model_name);
-  single_model->set_base_path(model_base_path);
-  single_model->set_model_platform(
-      tensorflow::serving::kTensorFlowModelPlatform);
-  return config;
+    if (TextFormat::ParseFromString(file_data_str, message)) {
+        return tf::Status::OK();
+    } else {
+        return tf::errors::InvalidArgument("Invalid protobuf file: '", file, "'");
+    }
 }
 
 template <typename ProtoType>
-ProtoType ReadProtoFromFile(const string& file) {
-  ProtoType proto;
-  TF_CHECK_OK(ParseProtoTextFile(file, &proto));
-  return proto;
+ProtoType ReadProtoFromFile(const string &file) {
+    ProtoType proto;
+    TF_CHECK_OK(ParseProtoTextFile(file, &proto));
+    return proto;
+}
+
+ModelServerConfig BuildSingleModelConfig(const string &model_name, const string &model_base_path) {
+    ModelServerConfig config;
+    LOG(INFO) << "Building single TensorFlow model file config: "
+              << " model_name: " << model_name << " model_base_path: " << model_base_path;
+    tf::serving::ModelConfig *single_model = config.mutable_model_config_list()->add_config();
+    single_model->set_name(model_name);
+    single_model->set_base_path(model_base_path);
+    single_model->set_model_platform(tf::serving::kTensorFlowModelPlatform);
+    return config;
 }
 
 int DeadlineToTimeoutMillis(const gpr_timespec deadline) {
-  return gpr_time_to_millis(
-      gpr_time_sub(gpr_convert_clock_type(deadline, GPR_CLOCK_MONOTONIC),
-                   gpr_now(GPR_CLOCK_MONOTONIC)));
+    return gpr_time_to_millis(gpr_time_sub(gpr_convert_clock_type(deadline, GPR_CLOCK_MONOTONIC),
+                                           gpr_now(GPR_CLOCK_MONOTONIC)));
 }
 
-grpc::Status ToGRPCStatus(const tensorflow::Status& status) {
-  const int kErrorMessageLimit = 1024;
-  string error_message;
-  if (status.error_message().length() > kErrorMessageLimit) {
-    error_message =
-        status.error_message().substr(0, kErrorMessageLimit) + "...TRUNCATED";
-  } else {
-    error_message = status.error_message();
-  }
-  return grpc::Status(static_cast<grpc::StatusCode>(status.code()),
-                      error_message);
+grpc::Status ToGRPCStatus(const tf::Status &status) {
+    const int kErrorMessageLimit = 1024;
+    string error_message;
+    if (status.error_message().length() > kErrorMessageLimit) {
+        error_message = status.error_message().substr(0, kErrorMessageLimit) + "...TRUNCATED";
+    } else {
+        error_message = status.error_message();
+    }
+    return grpc::Status(static_cast<grpc::StatusCode>(status.code()), error_message);
 }
 
-class PredictionServiceImpl final : public PredictionService::Service {
- public:
-  explicit PredictionServiceImpl(std::unique_ptr<ServerCore> core,
-                                 bool use_saved_model)
-      : core_(std::move(core)),
-        predictor_(new TensorflowPredictor(use_saved_model)),
-        use_saved_model_(use_saved_model) {}
+class PredictionServiceImpl : public PredictionService::Service {
+   public:
+    explicit PredictionServiceImpl(std::unique_ptr<ServerCore> core, bool use_saved_model)
+        : core_(std::move(core)),
+          predictor_(new TensorflowPredictor(use_saved_model)),
+          use_saved_model_(use_saved_model) {}
 
-  grpc::Status Predict(ServerContext* context, const PredictRequest* request,
-                       PredictResponse* response) override {
-    tensorflow::RunOptions run_options = tensorflow::RunOptions();
-    // By default, this is infinite which is the same default as RunOptions.
-    run_options.set_timeout_in_ms(
-        DeadlineToTimeoutMillis(context->raw_deadline()));
-    const grpc::Status status = ToGRPCStatus(
-        predictor_->Predict(run_options, core_.get(), *request, response));
-    if (!status.ok()) {
-      VLOG(1) << "Predict failed: " << status.error_message();
+    grpc::Status Predict(ServerContext *context, const PredictRequest *request,
+                         PredictResponse *response) override {
+        tf::RunOptions run_options = tf::RunOptions();
+        // By default, this is infinite which is the same default as
+        // RunOptions.
+        run_options.set_timeout_in_ms(DeadlineToTimeoutMillis(context->raw_deadline()));
+        const grpc::Status status =
+            ToGRPCStatus(predictor_->Predict(run_options, core_.get(), *request, response));
+        if (!status.ok()) {
+            VLOG(1) << "Predict failed: " << status.error_message();
+        }
+        return status;
     }
-    return status;
-  }
 
-  grpc::Status GetModelMetadata(ServerContext* context,
-                                const GetModelMetadataRequest* request,
-                                GetModelMetadataResponse* response) override {
-    if (!use_saved_model_) {
-      return ToGRPCStatus(tensorflow::errors::InvalidArgument(
-          "GetModelMetadata API is only available when use_saved_model is "
-          "set to true"));
+    grpc::Status GetModelMetadata(ServerContext *context, const GetModelMetadataRequest *request,
+                                  GetModelMetadataResponse *response) override {
+        if (!use_saved_model_) {
+            return ToGRPCStatus(
+                tf::errors::InvalidArgument("GetModelMetadata API is only available when "
+                                            "use_saved_model is "
+                                            "set to true"));
+        }
+        const grpc::Status status =
+            ToGRPCStatus(GetModelMetadataImpl::GetModelMetadata(core_.get(), *request, response));
+        if (!status.ok()) {
+            VLOG(1) << "GetModelMetadata failed: " << status.error_message();
+        }
+        return status;
     }
-    const grpc::Status status =
-        ToGRPCStatus(GetModelMetadataImpl::GetModelMetadata(
-            core_.get(), *request, response));
-    if (!status.ok()) {
-      VLOG(1) << "GetModelMetadata failed: " << status.error_message();
-    }
-    return status;
-  }
 
-  grpc::Status Classify(ServerContext* context,
-                        const ClassificationRequest* request,
-                        ClassificationResponse* response) override {
-    tensorflow::RunOptions run_options = tensorflow::RunOptions();
-    // By default, this is infinite which is the same default as RunOptions.
-    run_options.set_timeout_in_ms(
-        DeadlineToTimeoutMillis(context->raw_deadline()));
-    const grpc::Status status =
-        ToGRPCStatus(TensorflowClassificationServiceImpl::Classify(
+    grpc::Status Classify(ServerContext *context, const ClassificationRequest *request,
+                          ClassificationResponse *response) override {
+        tf::RunOptions run_options = tf::RunOptions();
+        // By default, this is infinite which is the same default as
+        // RunOptions.
+        run_options.set_timeout_in_ms(DeadlineToTimeoutMillis(context->raw_deadline()));
+        const grpc::Status status = ToGRPCStatus(TensorflowClassificationServiceImpl::Classify(
             run_options, core_.get(), *request, response));
-    if (!status.ok()) {
-      VLOG(1) << "Classify request failed: " << status.error_message();
+        if (!status.ok()) {
+            VLOG(1) << "Classify request failed: " << status.error_message();
+        }
+        return status;
     }
-    return status;
-  }
 
-  grpc::Status Regress(ServerContext* context, const RegressionRequest* request,
-                       RegressionResponse* response) override {
-    tensorflow::RunOptions run_options = tensorflow::RunOptions();
-    // By default, this is infinite which is the same default as RunOptions.
-    run_options.set_timeout_in_ms(
-        DeadlineToTimeoutMillis(context->raw_deadline()));
-    const grpc::Status status =
-        ToGRPCStatus(TensorflowRegressionServiceImpl::Regress(
-            run_options, core_.get(), *request, response));
-    if (!status.ok()) {
-      VLOG(1) << "Regress request failed: " << status.error_message();
+    grpc::Status Regress(ServerContext *context, const RegressionRequest *request,
+                         RegressionResponse *response) override {
+        tf::RunOptions run_options = tf::RunOptions();
+        // By default, this is infinite which is the same default as
+        // RunOptions.
+        run_options.set_timeout_in_ms(DeadlineToTimeoutMillis(context->raw_deadline()));
+        const grpc::Status status = ToGRPCStatus(
+            TensorflowRegressionServiceImpl::Regress(run_options, core_.get(), *request, response));
+        if (!status.ok()) {
+            VLOG(1) << "Regress request failed: " << status.error_message();
+        }
+        return status;
     }
-    return status;
-  }
 
-  grpc::Status MultiInference(ServerContext* context,
-                              const MultiInferenceRequest* request,
-                              MultiInferenceResponse* response) override {
-    tensorflow::RunOptions run_options = tensorflow::RunOptions();
-    // By default, this is infinite which is the same default as RunOptions.
-    run_options.set_timeout_in_ms(
-        DeadlineToTimeoutMillis(context->raw_deadline()));
-    const grpc::Status status = ToGRPCStatus(
-        RunMultiInference(run_options, core_.get(), *request, response));
-    if (!status.ok()) {
-      VLOG(1) << "MultiInference request failed: " << status.error_message();
+    grpc::Status MultiInference(ServerContext *context, const MultiInferenceRequest *request,
+                                MultiInferenceResponse *response) override {
+        tf::RunOptions run_options = tf::RunOptions();
+        // By default, this is infinite which is the same default as
+        // RunOptions.
+        run_options.set_timeout_in_ms(DeadlineToTimeoutMillis(context->raw_deadline()));
+        const grpc::Status status =
+            ToGRPCStatus(RunMultiInference(run_options, core_.get(), *request, response));
+        if (!status.ok()) {
+            VLOG(1) << "MultiInference request failed: " << status.error_message();
+        }
+        return status;
     }
-    return status;
-  }
 
- private:
-  std::unique_ptr<ServerCore> core_;
-  std::unique_ptr<TensorflowPredictor> predictor_;
-  bool use_saved_model_;
+   private:
+    std::unique_ptr<ServerCore> core_;
+    std::unique_ptr<TensorflowPredictor> predictor_;
+    bool use_saved_model_;
 };
 
-void RunServer(int port, std::unique_ptr<ServerCore> core,
-               bool use_saved_model) {
-  // "0.0.0.0" is the way to listen on localhost in gRPC.
-  const string server_address = "0.0.0.0:" + std::to_string(port);
-  PredictionServiceImpl service(std::move(core), use_saved_model);
-  ServerBuilder builder;
-  std::shared_ptr<grpc::ServerCredentials> creds = InsecureServerCredentials();
-  builder.AddListeningPort(server_address, creds);
-  builder.RegisterService(&service);
-  builder.SetMaxMessageSize(tensorflow::kint32max);
-  std::unique_ptr<Server> server(builder.BuildAndStart());
-  LOG(INFO) << "Running ModelServer at " << server_address << " ...";
-  server->Wait();
+class BrandonPredictionService : public PredictionServiceImpl {
+   public:
+    explicit BrandonPredictionService(std::unique_ptr<ServerCore> core, bool use_saved_model)
+        : PredictionServiceImpl(std::move(core), use_saved_model) {}
+
+    grpc::Status Predict(ServerContext *context, const PredictRequest *request,
+                         PredictResponse *response) override {
+        return PredictionServiceImpl::Predict(context, request, response);
+
+        //   vector<decltype(response->outputs)> modelTreeOutputs;
+        //   while (response->outputs fucking exist) {
+        //     modelTreeOutputs.emplace_back(response->outputs);
+        //     fuckingModifyRequestSoWeCanGetTheNextFuckingModel();
+        // hi
+        //     PredictionServiceImpl::Predict(context, request,
+        //     response);
+        //   }
+    }
+};
+
+void RunServer(int port, std::unique_ptr<ServerCore> core, bool use_saved_model) {
+    // "0.0.0.0" is the way to listen on localhost in gRPC.
+    const string server_address = "0.0.0.0:" + std::to_string(port);
+    BrandonPredictionService service(std::move(core), use_saved_model);
+    ServerBuilder builder;
+    std::shared_ptr<grpc::ServerCredentials> creds = InsecureServerCredentials();
+    builder.AddListeningPort(server_address, creds);
+    builder.RegisterService(&service);
+    builder.SetMaxMessageSize(tf::kint32max);
+    std::unique_ptr<Server> server(builder.BuildAndStart());
+    LOG(INFO) << "Running ModelServer at " << server_address << " ...";
+    server->Wait();
 }
 
 // Parses an ascii PlatformConfigMap protobuf from 'file'.
-tensorflow::serving::PlatformConfigMap ParsePlatformConfigMap(
-    const string& file) {
-  tensorflow::serving::PlatformConfigMap platform_config_map;
-  TF_CHECK_OK(ParseProtoTextFile(file, &platform_config_map));
-  return platform_config_map;
+tf::serving::PlatformConfigMap ParsePlatformConfigMap(const string &file) {
+    tf::serving::PlatformConfigMap platform_config_map;
+    TF_CHECK_OK(ParseProtoTextFile(file, &platform_config_map));
+    return platform_config_map;
 }
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  tensorflow::int32 port = 8500;
-  bool enable_batching = false;
-  tensorflow::string batching_parameters_file;
-  tensorflow::string model_name = "default";
-  tensorflow::int32 file_system_poll_wait_seconds = 1;
-  tensorflow::string model_base_path;
-  const bool use_saved_model = true;
-  // Tensorflow session parallelism of zero means that both inter and intra op
-  // thread pools will be auto configured.
-  tensorflow::int64 tensorflow_session_parallelism = 0;
-  string platform_config_file = "";
-  string model_config_file;
-  std::vector<tensorflow::Flag> flag_list = {
-      tensorflow::Flag("port", &port, "port to listen on"),
-      tensorflow::Flag("enable_batching", &enable_batching, "enable batching"),
-      tensorflow::Flag("batching_parameters_file", &batching_parameters_file,
-                       "If non-empty, read an ascii BatchingParameters "
-                       "protobuf from the supplied file name and use the "
-                       "contained values instead of the defaults."),
-      tensorflow::Flag("model_config_file", &model_config_file,
-                       "If non-empty, read an ascii ModelServerConfig "
-                       "protobuf from the supplied file name, and serve the "
-                       "models in that file. This config file can be used to "
-                       "specify multiple models to serve and other advanced "
-                       "parameters including non-default version policy. (If "
-                       "used, --model_name, --model_base_path are ignored.)"),
-      tensorflow::Flag("model_name", &model_name,
-                       "name of model (ignored "
-                       "if --model_config_file flag is set"),
-      tensorflow::Flag("model_base_path", &model_base_path,
-                       "path to export (ignored if --model_config_file flag "
-                       "is set, otherwise required)"),
-      tensorflow::Flag("file_system_poll_wait_seconds",
-                       &file_system_poll_wait_seconds,
-                       "interval in seconds between each poll of the file "
-                       "system for new model version"),
-      tensorflow::Flag("tensorflow_session_parallelism",
-                       &tensorflow_session_parallelism,
-                       "Number of threads to use for running a "
-                       "Tensorflow session. Auto-configured by default."
-                       "Note that this option is ignored if "
-                       "--platform_config_file is non-empty."),
-      tensorflow::Flag("platform_config_file", &platform_config_file,
-                       "If non-empty, read an ascii PlatformConfigMap protobuf "
-                       "from the supplied file name, and use that platform "
-                       "config instead of the Tensorflow platform. (If used, "
-                       "--enable_batching is ignored.)")};
-  string usage = tensorflow::Flags::Usage(argv[0], flag_list);
-  const bool parse_result = tensorflow::Flags::Parse(&argc, argv, flag_list);
-  if (!parse_result || (model_base_path.empty() && model_config_file.empty())) {
-    std::cout << usage;
-    return -1;
-  }
-  tensorflow::port::InitMain(argv[0], &argc, &argv);
-  if (argc != 1) {
-    std::cout << "unknown argument: " << argv[1] << "\n" << usage;
-  }
+int main(int argc, char **argv) {
+    string model_base_path;
+    string batching_parameters_file;
+    bool enable_batching = false;
+    const bool use_saved_model = true;
+    tf::int32 port = 8500;
+    string model_name = "default";
+    tf::int32 file_system_poll_wait_seconds = 1;
+    string platform_config_file = "";
+    string model_config_file;
+    // Tensorflow session parallelism of zero means that both inter and intra op
+    // thread pools will be auto configured.
+    tf::int64 tensorflow_session_parallelism = 0;
 
-  // For ServerCore Options, we leave servable_state_monitor_creator unspecified
-  // so the default servable_state_monitor_creator will be used.
-  ServerCore::Options options;
+    std::vector<tf::Flag> flag_list = {
+        tf::Flag("port", &port, "port to listen on"),
+        tf::Flag("enable_batching", &enable_batching, "enable batching"),
+        tf::Flag("batching_parameters_file", &batching_parameters_file,
+                 "If non-empty, read an ascii BatchingParameters "
+                 "protobuf from the supplied file name and use the "
+                 "contained values instead of the defaults."),
+        tf::Flag("model_config_file", &model_config_file,
+                 "If non-empty, read an ascii ModelServerConfig "
+                 "protobuf from the supplied file name, and serve the "
+                 "models in that file. This config file can be used to "
+                 "specify multiple models to serve and other advanced "
+                 "parameters including non-default version policy. (If "
+                 "used, --model_name, --model_base_path are ignored.)"),
+        tf::Flag("model_name", &model_name,
+                 "name of model (ignored "
+                 "if --model_config_file flag is set"),
+        tf::Flag("model_base_path", &model_base_path,
+                 "path to export (ignored if --model_config_file flag "
+                 "is set, otherwise required)"),
+        tf::Flag("file_system_poll_wait_seconds", &file_system_poll_wait_seconds,
+                 "interval in seconds between each poll of the file "
+                 "system for new model version"),
+        tf::Flag("tensorflow_session_parallelism", &tensorflow_session_parallelism,
+                 "Number of threads to use for running a "
+                 "Tensorflow session. Auto-configured by default."
+                 "Note that this option is ignored if "
+                 "--platform_config_file is non-empty."),
+        tf::Flag("platform_config_file", &platform_config_file,
+                 "If non-empty, read an ascii PlatformConfigMap protobuf "
+                 "from the supplied file name, and use that platform "
+                 "config instead of the Tensorflow platform. (If used, "
+                 "--enable_batching is ignored.)")};
 
-  // model server config
-  if (model_config_file.empty()) {
-    options.model_server_config =
-        BuildSingleModelConfig(model_name, model_base_path);
-  } else {
-    options.model_server_config =
-        ReadProtoFromFile<ModelServerConfig>(model_config_file);
-  }
-
-  if (platform_config_file.empty()) {
-    SessionBundleConfig session_bundle_config;
-    // Batching config
-    if (enable_batching) {
-      BatchingParameters* batching_parameters =
-          session_bundle_config.mutable_batching_parameters();
-      if (batching_parameters_file.empty()) {
-        batching_parameters->mutable_thread_pool_name()->set_value(
-            "model_server_batch_threads");
-      } else {
-        *batching_parameters =
-            ReadProtoFromFile<BatchingParameters>(batching_parameters_file);
-      }
-    } else if (!batching_parameters_file.empty()) {
-      LOG(FATAL)  // Crash ok
-          << "You supplied --batching_parameters_file without "
-             "--enable_batching";
+    string usage = tf::Flags::Usage(argv[0], flag_list);
+    const bool parse_result = tf::Flags::Parse(&argc, argv, flag_list);
+    if (!parse_result || (model_base_path.empty() && model_config_file.empty())) {
+        std::cout << usage;
+        return -1;
+    }
+    tf::port::InitMain(argv[0], &argc, &argv);
+    if (argc != 1) {
+        std::cout << "unknown argument: " << argv[1] << "\n" << usage;
     }
 
-    session_bundle_config.mutable_session_config()
-        ->set_intra_op_parallelism_threads(tensorflow_session_parallelism);
-    session_bundle_config.mutable_session_config()
-        ->set_inter_op_parallelism_threads(tensorflow_session_parallelism);
-    options.platform_config_map = CreateTensorFlowPlatformConfigMap(
-        session_bundle_config, use_saved_model);
-  } else {
-    options.platform_config_map = ParsePlatformConfigMap(platform_config_file);
-  }
+    // For ServerCore Options, we leave servable_state_monitor_creator unspecified
+    // so the default servable_state_monitor_creator will be used.
+    ServerCore::Options options;
 
-  options.custom_model_config_loader = &LoadCustomModelConfig;
+    // model server config
+    if (model_config_file.empty()) {
+        options.model_server_config = BuildSingleModelConfig(model_name, model_base_path);
+    } else {
+        options.model_server_config = ReadProtoFromFile<ModelServerConfig>(model_config_file);
+    }
 
-  options.aspired_version_policy =
-      std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
-  options.file_system_poll_wait_seconds = file_system_poll_wait_seconds;
+    if (platform_config_file.empty()) {
+        SessionBundleConfig session_bundle_config;
+        // Batching config
+        if (enable_batching) {
+            BatchingParameters *batching_parameters =
+                session_bundle_config.mutable_batching_parameters();
+            if (batching_parameters_file.empty()) {
+                batching_parameters->mutable_thread_pool_name()->set_value(
+                    "model_server_batch_threads");
+            } else {
+                *batching_parameters =
+                    ReadProtoFromFile<BatchingParameters>(batching_parameters_file);
+            }
+        } else if (!batching_parameters_file.empty()) {
+            LOG(FATAL)  // Crash ok
+                << "You supplied --batching_parameters_file "
+                   "without "
+                   "--enable_batching";
+        }
 
-  std::unique_ptr<ServerCore> core;
-  TF_CHECK_OK(ServerCore::Create(std::move(options), &core));
-  RunServer(port, std::move(core), use_saved_model);
+        session_bundle_config.mutable_session_config()->set_intra_op_parallelism_threads(
+            tensorflow_session_parallelism);
+        session_bundle_config.mutable_session_config()->set_inter_op_parallelism_threads(
+            tensorflow_session_parallelism);
+        options.platform_config_map =
+            CreateTensorFlowPlatformConfigMap(session_bundle_config, use_saved_model);
+    } else {
+        options.platform_config_map = ParsePlatformConfigMap(platform_config_file);
+    }
 
-  return 0;
+    options.aspired_version_policy = std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
+    options.file_system_poll_wait_seconds = file_system_poll_wait_seconds;
+
+    std::unique_ptr<ServerCore> core;
+    TF_CHECK_OK(ServerCore::Create(std::move(options), &core));
+    RunServer(port, std::move(core), use_saved_model);
+
+    return 0;
 }
