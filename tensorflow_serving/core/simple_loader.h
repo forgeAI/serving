@@ -152,20 +152,17 @@ class SimpleLoader : public Loader {
 // ensures that no virtual method calls are in flight during destruction of
 // member variables.
 template <typename DataType, typename ServableType>
-class SimpleLoaderSourceAdapter
-    : public UnarySourceAdapter<DataType, std::unique_ptr<Loader>> {
+class SimpleLoaderSourceAdapter : public UnarySourceAdapter<DataType, std::unique_ptr<Loader>> {
  public:
   ~SimpleLoaderSourceAdapter() override = 0;
 
   // Creator is called by the produced Loaders' Load() method, and used to
   // create objects of type ServableType. It takes a DataType object as input.
-  using Creator =
-      std::function<Status(const DataType&, std::unique_ptr<ServableType>*)>;
+  using Creator = std::function<Status(const DataType&, std::unique_ptr<ServableType>*)>;
 
   // A callback for estimating a servable's resource usage. It takes a DataType
   // object as input.
-  using ResourceEstimator =
-      std::function<Status(const DataType&, ResourceAllocation*)>;
+  using ResourceEstimator = std::function<Status(const DataType&, ResourceAllocation*)>;
 
   // Returns a dummy resource-estimation callback that estimates the servable's
   // resource footprint at zero. Useful in best-effort or test environments that
@@ -178,8 +175,7 @@ class SimpleLoaderSourceAdapter
 
  protected:
   // This is an abstract class.
-  SimpleLoaderSourceAdapter(Creator creator,
-                            ResourceEstimator resource_estimator);
+  SimpleLoaderSourceAdapter(Creator creator, ResourceEstimator resource_estimator);
 
   Status Convert(const DataType& data, std::unique_ptr<Loader>* loader) final;
 
@@ -193,6 +189,11 @@ class SimpleLoaderSourceAdapter
 //////////
 // Implementation details follow. API users need not read.
 
+/// =============================================
+/// ResourceEstimator EstimateNoResources();
+/// where
+/// ResourceEstimator = std::function<Status(ResourceAllocation*)>;
+/// =============================================
 template <typename ServableType>
 typename SimpleLoader<ServableType>::ResourceEstimator
 SimpleLoader<ServableType>::EstimateNoResources() {
@@ -202,30 +203,38 @@ SimpleLoader<ServableType>::EstimateNoResources() {
   };
 }
 
+/// =============================================
+/// SimpleLoader(Creator, ResourceEstimator);
+/// =============================================
 template <typename ServableType>
-SimpleLoader<ServableType>::SimpleLoader(Creator creator,
+SimpleLoader<ServableType>::SimpleLoader(Creator creator, 
                                          ResourceEstimator resource_estimator)
-    : creator_(creator), resource_estimator_(resource_estimator) {
+    : creator_(creator), 
+      resource_estimator_(resource_estimator) {
   ResourceUtil::Options resource_util_options;
   resource_util_options.devices = {{device_types::kMain, 1}};
-  resource_util_ =
-      std::unique_ptr<ResourceUtil>(new ResourceUtil(resource_util_options));
 
-  ram_resource_ = resource_util_->CreateBoundResource(
-      device_types::kMain, resource_kinds::kRamBytes);
+  resource_util_  = std::unique_ptr<ResourceUtil>(new ResourceUtil(resource_util_options));
+  ram_resource_   = resource_util_->CreateBoundResource(
+    device_types::kMain, resource_kinds::kRamBytes);
 }
 
+/// =============================================
+/// SimpleLoader(Creator, ResourceEstimator, ResourceEstimator);
+/// =============================================
 template <typename ServableType>
-SimpleLoader<ServableType>::SimpleLoader(
-    Creator creator, ResourceEstimator resource_estimator,
-    ResourceEstimator post_load_resource_estimator)
+SimpleLoader<ServableType>::SimpleLoader(Creator creator, 
+                                         ResourceEstimator resource_estimator,
+                                         ResourceEstimator post_load_resource_estimator)
     : SimpleLoader(creator, resource_estimator) {
   post_load_resource_estimator_ = post_load_resource_estimator;
 }
 
+/// =============================================
+/// EstimateResources(ResourceAllocation*);
+/// =============================================
 template <typename ServableType>
-Status SimpleLoader<ServableType>::EstimateResources(
-    ResourceAllocation* estimate) const {
+Status SimpleLoader<ServableType>::EstimateResources(ResourceAllocation* estimate) const {
   if (memoized_resource_estimate_) {
     *estimate = *memoized_resource_estimate_;
     return Status::OK();
@@ -237,6 +246,9 @@ Status SimpleLoader<ServableType>::EstimateResources(
   return Status::OK();
 }
 
+/// =============================================
+/// Load()
+/// =============================================
 template <typename ServableType>
 Status SimpleLoader<ServableType>::Load() {
   TF_RETURN_IF_ERROR(creator_(&servable_));
@@ -298,10 +310,16 @@ void SimpleLoader<ServableType>::Unload() {
   }
 }
 
+/// =============================================
+/// ~SimpleLoaderSourceAdaptor();
+/// =============================================
 template <typename DataType, typename ServableType>
 SimpleLoaderSourceAdapter<DataType,
                           ServableType>::~SimpleLoaderSourceAdapter() {}
 
+/// =============================================
+/// EstimateNoResources();
+/// =============================================
 template <typename DataType, typename ServableType>
 typename SimpleLoaderSourceAdapter<DataType, ServableType>::ResourceEstimator
 SimpleLoaderSourceAdapter<DataType, ServableType>::EstimateNoResources() {
@@ -311,14 +329,23 @@ SimpleLoaderSourceAdapter<DataType, ServableType>::EstimateNoResources() {
   };
 }
 
+/// =============================================
+/// SimpleLoaderSourceAdaptor(Creator, ResourceEstimator);
+/// =============================================
 template <typename DataType, typename ServableType>
 SimpleLoaderSourceAdapter<DataType, ServableType>::SimpleLoaderSourceAdapter(
-    Creator creator, ResourceEstimator resource_estimator)
-    : creator_(creator), resource_estimator_(resource_estimator) {}
+    Creator creator, 
+    ResourceEstimator resource_estimator) 
+    : creator_(creator), 
+      resource_estimator_(resource_estimator) {}
 
+/// =============================================
+/// Convert(const DataType&, unique_ptr<Loader>*);
+/// =============================================
 template <typename DataType, typename ServableType>
 Status SimpleLoaderSourceAdapter<DataType, ServableType>::Convert(
-    const DataType& data, std::unique_ptr<Loader>* loader) {
+    const DataType& data, 
+    std::unique_ptr<Loader>* loader) {
   // We copy 'creator_' and 'resource_estimator_', rather than passing via
   // reference, so that the loader we emit is not tied to the adapter, in case
   // the adapter is deleted before the loader.
