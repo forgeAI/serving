@@ -115,8 +115,6 @@ using tf::serving::RegressionRequest;
 using tf::serving::RegressionResponse;
 using tf::serving::PredictionService;
 
-using tf::protobuf::TextFormat;
-
 namespace {
 
 tf::Status ParseProtoTextFile(const string &file, google::protobuf::Message *message) {
@@ -124,7 +122,7 @@ tf::Status ParseProtoTextFile(const string &file, google::protobuf::Message *mes
     TF_RETURN_IF_ERROR(tf::Env::Default()->NewReadOnlyMemoryRegionFromFile(file, &file_data));
     string file_data_str(static_cast<const char *>(file_data->data()), file_data->length());
 
-    if (TextFormat::ParseFromString(file_data_str, message)) {
+    if (tf::protobuf::TextFormat::ParseFromString(file_data_str, message)) {
         return tf::Status::OK();
     } else {
         return tf::errors::InvalidArgument("Invalid protobuf file: '", file, "'");
@@ -139,9 +137,9 @@ ProtoType ReadProtoFromFile(const string &file) {
 }
 
 ModelServerConfig BuildSingleModelConfig(const string &model_name, const string &model_base_path) {
-    ModelServerConfig config;
     LOG(INFO) << "Building single TensorFlow model file config: "
               << " model_name: " << model_name << " model_base_path: " << model_base_path;
+    ModelServerConfig config;
     tf::serving::ModelConfig *single_model = config.mutable_model_config_list()->add_config();
     single_model->set_name(model_name);
     single_model->set_base_path(model_base_path);
@@ -191,8 +189,7 @@ class PredictionServiceImpl : public PredictionService::Service {
         if (!use_saved_model_) {
             return ToGRPCStatus(
                 tf::errors::InvalidArgument("GetModelMetadata API is only available when "
-                                            "use_saved_model is "
-                                            "set to true"));
+                                            "use_saved_model is set to true"));
         }
         const grpc::Status status =
             ToGRPCStatus(GetModelMetadataImpl::GetModelMetadata(core_.get(), *request, response));
@@ -205,8 +202,7 @@ class PredictionServiceImpl : public PredictionService::Service {
     grpc::Status Classify(ServerContext *context, const ClassificationRequest *request,
                           ClassificationResponse *response) override {
         tf::RunOptions run_options = tf::RunOptions();
-        // By default, this is infinite which is the same default as
-        // RunOptions.
+        // By default, this is infinite which is the same default as RunOptions.
         run_options.set_timeout_in_ms(DeadlineToTimeoutMillis(context->raw_deadline()));
         const grpc::Status status = ToGRPCStatus(TensorflowClassificationServiceImpl::Classify(
             run_options, core_.get(), *request, response));
@@ -393,7 +389,8 @@ int main(int argc, char **argv) {
         options.platform_config_map = ParsePlatformConfigMap(platform_config_file);
     }
 
-    options.aspired_version_policy = std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
+    options.aspired_version_policy =
+        std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
     options.file_system_poll_wait_seconds = file_system_poll_wait_seconds;
 
     std::unique_ptr<ServerCore> core;

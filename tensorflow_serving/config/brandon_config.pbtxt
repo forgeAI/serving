@@ -1,0 +1,8 @@
+model_config_list: {
+    config: {
+        name: "predict_single_file",
+        base_path: "/home/brandon/Documents/Forge/forgeai-ai/HierarchicalClassifier/models/servables/nuclear_small",
+        model_platform: "tensorflow"
+        
+    },
+}
