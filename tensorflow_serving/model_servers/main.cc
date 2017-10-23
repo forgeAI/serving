@@ -347,9 +347,11 @@ int main(int argc, char **argv) {
     SessionBundleConfig session_bundle_config;
     // Batching config
     if (enable_batching) {
-        BatchingParameters *batching_parameters = session_bundle_config.mutable_batching_parameters();
+        BatchingParameters *batching_parameters =
+            session_bundle_config.mutable_batching_parameters();
         if (batching_parameters_file.empty()) {
-            batching_parameters->mutable_thread_pool_name()->set_value("model_server_batch_threads");
+            batching_parameters->mutable_thread_pool_name()->set_value(
+                "model_server_batch_threads");
         } else {
             *batching_parameters = ReadProtoFromFile<BatchingParameters>(batching_parameters_file);
         }
@@ -358,11 +360,15 @@ int main(int argc, char **argv) {
             << "You supplied --batching_parameters_file without --enable_batching";
     }
 
-    session_bundle_config.mutable_session_config()->set_intra_op_parallelism_threads(tensorflow_session_parallelism);
-    session_bundle_config.mutable_session_config()->set_inter_op_parallelism_threads(tensorflow_session_parallelism);
-    options.platform_config_map = CreateTensorFlowPlatformConfigMap(session_bundle_config, use_saved_model);
+    session_bundle_config.mutable_session_config()->set_intra_op_parallelism_threads(
+        tensorflow_session_parallelism);
+    session_bundle_config.mutable_session_config()->set_inter_op_parallelism_threads(
+        tensorflow_session_parallelism);
+    options.platform_config_map =
+        CreateTensorFlowPlatformConfigMap(session_bundle_config, use_saved_model);
 
-    options.aspired_version_policy = std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
+    options.aspired_version_policy =
+        std::unique_ptr<AspiredVersionPolicy>(new AvailabilityPreservingPolicy);
     options.file_system_poll_wait_seconds = file_system_poll_wait_seconds;
 
     std::unique_ptr<ServerCore> core;
